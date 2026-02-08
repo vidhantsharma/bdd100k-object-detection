@@ -7,11 +7,16 @@
 # ============================================================================
 data/raw/images/
 data/raw/labels/*.json
+data/subset/images/
+data/subset/labels/*.json
 
 # Generated analysis outputs
 data/analysis/*.json
 data/analysis/*.html
 data/analysis/visualizations/*.png
+
+# Model checkpoints (if any)
+data/training/*.pth
 
 # ============================================================================
 # PYTHON
@@ -43,6 +48,7 @@ Thumbs.db
 # ============================================================================
 # Logs
 *.log
+data/training/logs/*
 
 # Temporary files
 *.tmp

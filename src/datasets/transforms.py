@@ -54,9 +54,14 @@ class RandomHorizontalFlip:
         if random.random() < self.p:
             image = F.hflip(image)
             if target is not None and 'boxes' in target:
+                # Get image width (handle both PIL Image and Tensor)
+                if isinstance(image, torch.Tensor):
+                    _, width = image.shape[-2:]
+                else:
+                    width, _ = image.size
+                
                 # Flip bounding boxes
-                _, width = image.shape[-2:]
-                boxes = target['boxes']
+                boxes = target['boxes'].clone()
                 boxes[:, [0, 2]] = width - boxes[:, [2, 0]]
                 target['boxes'] = boxes
         
@@ -130,10 +135,10 @@ class ColorJitter:
 def get_train_transform():
     """Get training transforms with augmentation."""
     return Compose([
-        RandomResize(min_size=600, max_size=1000),
         ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-        ToTensor(),
+        RandomResize(min_size=600, max_size=1000),
         RandomHorizontalFlip(p=0.5),
+        ToTensor(),
         Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
 

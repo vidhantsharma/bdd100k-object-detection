@@ -136,68 +136,270 @@ def run_analysis(args, logger):
     return True
 
 
-def run_preprocessing(args, logger):
-    """Run data preprocessing."""
+def run_training(args, logger, config):
+    """Run model training."""
     logger.info("\n" + "=" * 60)
-    logger.info("STAGE 2: Data Preprocessing")
+    logger.info("STAGE 3: Model Training")
     logger.info("=" * 60)
     
-    from src.preprocessing.convert_bdd import convert_bdd_to_coco
-    from src.analysis.parse_annotations import load_bdd_images, images_to_coco_format
-    from src.datasets.bdd_dataset import BDDDataset
+    import torch
+    from src.models.detector import create_model
+    from src.dataloaders.bdd_dataloader import get_dataloaders
+    from src.training.train import Trainer
+    from src.training.optimizer import create_optimizer, create_scheduler
     
-    # Convert to COCO format
-    labels_file = os.path.join(args.data_root, 'labels', f'bdd100k_labels_images_{args.split}.json')
-    logger.info(f"Converting {labels_file} to COCO format...")
+    # Device setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logger.info(f"Device: {device}")
     
-    images = load_bdd_images(labels_file)
-    coco_data = images_to_coco_format(images, BDDDataset.CLASSES)
+    if device.type == 'cuda':
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     
-    # Save COCO format
-    output_file = Path(args.output_dir) / 'processed' / f'{args.split}_coco.json'
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    # Get training config
+    train_config = config.get('training', {})
+    model_config = config.get('model', {})
     
-    with open(output_file, 'w') as f:
-        json.dump(coco_data, f, indent=2)
+    # Determine if fine-tuning or training from scratch
+    finetune = model_config.get('pretrained', True)
+    logger.info(f"\nTraining Mode: {'Fine-tuning pretrained model' if finetune else 'Training from scratch'}")
     
-    logger.info(f"COCO format saved to: {output_file}")
-    logger.info(f"  Images: {len(coco_data['images'])}")
-    logger.info(f"  Annotations: {len(coco_data['annotations'])}")
-    logger.info(f"  Categories: {len(coco_data['categories'])}")
+    # Load class weights for imbalanced data (from analysis)
+    class_weights = None
+    class_weights_dict = None  # For weighted sampling
+    if train_config.get('use_class_weights', False):
+        logger.info("\nLoading class weights from data analysis...")
+        stats_file = Path(args.output_dir) / 'analysis' / 'train_statistics.json'
+        if stats_file.exists():
+            with open(stats_file, 'r') as f:
+                stats = json.load(f)
+            
+            # Calculate inverse frequency weights
+            category_counts = stats['category_counts']
+            total_objects = stats['total_objects']
+            
+            from src.datasets.bdd_dataset import BDDDataset
+            weights = []
+            weights_dict = {}
+            for cls in BDDDataset.CLASSES:
+                count = category_counts.get(cls, 1)
+                weight = total_objects / (len(BDDDataset.CLASSES) * count)
+                weights.append(weight)
+                weights_dict[cls] = weight
+            
+            class_weights = torch.tensor(weights, dtype=torch.float32).to(device)
+            class_weights_dict = weights_dict
+            logger.info(f"Class weights computed:")
+            for cls, weight in zip(BDDDataset.CLASSES, weights):
+                logger.info(f"  {cls:20s}: {weight:.4f}")
+        else:
+            logger.warning(f"Statistics file not found: {stats_file}")
+            logger.warning("Run analysis stage first to compute class weights")
+    
+    # Create model
+    logger.info("\nCreating model...")
+    model = create_model(
+        num_classes=model_config.get('num_classes', 10),
+        pretrained=finetune,
+        trainable_backbone_layers=model_config.get('backbone', {}).get('trainable_layers', 3),
+        device=device
+    )
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Model: Faster R-CNN with ResNet50-FPN backbone")
+    logger.info(f"Total parameters: {total_params:,}")
+    logger.info(f"Trainable parameters: {trainable_params:,}")
+    
+    # Create dataloaders with weighted sampling option
+    logger.info("\nCreating dataloaders...")
+    use_weighted_sampling = train_config.get('use_weighted_sampling', False)
+    if use_weighted_sampling and class_weights_dict is None:
+        logger.warning("Weighted sampling requested but no class weights available. Disabling weighted sampling.")
+        use_weighted_sampling = False
+    
+    train_loader, val_loader = get_dataloaders(
+        root_dir=args.data_root,
+        train_batch_size=train_config.get('batch_size', 4),
+        val_batch_size=train_config.get('batch_size', 4),
+        num_workers=train_config.get('num_workers', 4),
+        min_bbox_area=train_config.get('min_bbox_area', 16),
+        use_weighted_sampling=use_weighted_sampling,
+        class_weights=class_weights_dict
+    )
+    
+    logger.info(f"Train dataset: {len(train_loader.dataset)} images")
+    logger.info(f"Val dataset: {len(val_loader.dataset)} images")
+    logger.info(f"Train batches: {len(train_loader)}")
+    logger.info(f"Val batches: {len(val_loader)}")
+    if use_weighted_sampling:
+        logger.info(f"Using weighted sampling to handle class imbalance")
+    
+    # Store class weights in model for use in loss computation
+    if class_weights is not None:
+        model.class_weights = class_weights
+    
+    # Create optimizer
+    logger.info("\nCreating optimizer...")
+    optimizer = create_optimizer(
+        model,
+        optimizer_name=train_config.get('optimizer', 'sgd'),
+        learning_rate=train_config.get('learning_rate', 0.005),
+        momentum=train_config.get('momentum', 0.9),
+        weight_decay=train_config.get('weight_decay', 0.0005)
+    )
+    logger.info(f"Optimizer: {train_config.get('optimizer', 'sgd')}")
+    logger.info(f"Learning rate: {train_config.get('learning_rate', 0.005)}")
+    
+    # Create scheduler
+    scheduler = None
+    scheduler_config = train_config.get('scheduler', {})
+    if scheduler_config.get('type', 'step') != 'none':
+        logger.info(f"Scheduler: {scheduler_config.get('type', 'step')}")
+        
+        # Build scheduler kwargs based on type
+        scheduler_kwargs = {
+            'step_size': scheduler_config.get('step_size', 3),
+            'gamma': scheduler_config.get('gamma', 0.1),
+        }
+        
+        # Add T_max only for cosine scheduler
+        if scheduler_config.get('type', 'step') == 'cosine':
+            scheduler_kwargs['T_max'] = train_config.get('num_epochs', 10)
+        
+        scheduler = create_scheduler(
+            optimizer,
+            scheduler_name=scheduler_config.get('type', 'step'),
+            **scheduler_kwargs
+        )
+    
+    # Create output directory for training
+    training_output_dir = Path(args.output_dir) / 'training'
+    training_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create trainer
+    logger.info("\nInitializing trainer...")
+    trainer = Trainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=optimizer,
+        device=device,
+        output_dir=str(training_output_dir),
+        log_interval=train_config.get('log_interval', 10),
+        save_interval=train_config.get('save_interval', 1),
+        use_tensorboard=True,
+        gradient_accumulation_steps=train_config.get('gradient_accumulation_steps', 1)
+    )
+    
+    # Start training
+    num_epochs = train_config.get('num_epochs', 10)
+    logger.info("\n" + "=" * 60)
+    logger.info(f"Starting Training - {num_epochs} epochs")
+    logger.info("=" * 60)
+    
+    history = trainer.train(
+        num_epochs=num_epochs,
+        scheduler=scheduler
+    )
+    
+    # Save final model
+    final_model_path = training_output_dir / 'final_model.pth'
+    model.save(str(final_model_path))
+    logger.info(f"\nFinal model saved to: {final_model_path}")
+    
+    # Save training history
+    history_path = training_output_dir / 'training_history.json'
+    with open(history_path, 'w') as f:
+        json.dump(history, f, indent=2)
+    logger.info(f"Training history saved to: {history_path}")
     
     return True
 
 
-def run_model_test(args, logger):
-    """Test model loading and inference."""
+def run_evaluation(args, logger, config):
+    """Run model evaluation."""
     logger.info("\n" + "=" * 60)
-    logger.info("STAGE 3: Model Test (Dummy Inference)")
+    logger.info("STAGE 4: Model Evaluation")
     logger.info("=" * 60)
     
-    try:
-        import torch
-        from src.models.detector import Detector
-        
-        logger.info("Creating model...")
-        detector = Detector(model_name=args.model, num_classes=len(args.classes) if hasattr(args, 'classes') else 10)
-        logger.info(f"Model created: {args.model}")
-        
-        # Dummy inference test
-        logger.info("Running dummy inference test...")
-        dummy_input = torch.randn(1, 3, 640, 640)
-        with torch.no_grad():
-            result = detector.predict(dummy_input)
-        logger.info("✓ Dummy inference successful")
-        
-        return True
-    except Exception as e:
-        logger.warning(f"Model test skipped: {e}")
-        return True  # Non-critical
+    import torch
+    from src.models.detector import create_model
+    from src.dataloaders.bdd_dataloader import make_dataloader
+    from src.evaluation.metrics import evaluate_model
+    
+    # Device setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logger.info(f"Device: {device}")
+    
+    # Find best model
+    training_output_dir = Path(args.output_dir) / 'training'
+    model_path = training_output_dir / 'best_model.pth'
+    
+    if not model_path.exists():
+        logger.error(f"Model not found: {model_path}")
+        logger.info("Please run training stage first")
+        return False
+    
+    logger.info(f"Loading model from: {model_path}")
+    
+    # Create model
+    model_config = config.get('model', {})
+    model = create_model(
+        num_classes=model_config.get('num_classes', 10),
+        pretrained=False,
+        device=device
+    )
+    
+    # Load checkpoint
+    checkpoint = torch.load(model_path, map_location=device)
+    model.model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    logger.info("Model loaded successfully")
+    
+    # Create validation dataloader
+    eval_config = config.get('evaluation', {})
+    logger.info(f"\nLoading validation data...")
+    val_loader = make_dataloader(
+        root_dir=args.data_root,
+        split='val',
+        batch_size=eval_config.get('batch_size', 4),
+        shuffle=False,
+        num_workers=eval_config.get('num_workers', 4)
+    )
+    logger.info(f"Validation dataset: {len(val_loader.dataset)} images")
+    
+    # Run evaluation
+    logger.info("\nEvaluating model...")
+    metrics = evaluate_model(
+        model,
+        val_loader,
+        device=str(device),
+        iou_threshold=eval_config.get('iou_threshold', 0.5),
+        confidence_threshold=eval_config.get('confidence_threshold', 0.5)
+    )
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("Evaluation Results:")
+    logger.info("=" * 60)
+    logger.info(f"mAP @ IoU={eval_config.get('iou_threshold', 0.5)}: {metrics['mAP']:.4f}")
+    logger.info(f"Number of images: {metrics['num_images']}")
+    
+    # Save results
+    eval_output_dir = Path(args.output_dir) / 'evaluation'
+    eval_output_dir.mkdir(parents=True, exist_ok=True)
+    
+    results_path = eval_output_dir / 'evaluation_results.json'
+    with open(results_path, 'w') as f:
+        json.dump(metrics, f, indent=2)
+    logger.info(f"\nResults saved to: {results_path}")
+    
+    return True
 
 
 def main():
     """Main function."""
-    parser = argparse.ArgumentParser(description='BDD100K Object Detection Analysis Pipeline')
+    parser = argparse.ArgumentParser(description='BDD100K Object Detection Pipeline')
     parser.add_argument('--config', type=str, default='config/config.yaml',
                        help='Path to configuration file')
     parser.add_argument('--data-root', type=str, default=None,
@@ -205,13 +407,10 @@ def main():
     parser.add_argument('--output-dir', type=str, default=None,
                        help='Output directory for results (overrides config)')
     parser.add_argument('--split', type=str, default='train', choices=['train', 'val', 'test'],
-                       help='Dataset split to analyze')
-    parser.add_argument('--model', type=str, default='fasterrcnn_resnet50_fpn',
-                       help='Model architecture')
-    parser.add_argument('--stages', type=str, nargs='+', 
-                       default=['analysis', 'preprocessing', 'model_test'],
-                       choices=['analysis', 'preprocessing', 'model_test', 'all'],
-                       help='Stages to run')
+                       help='Dataset split (only for analysis/evaluation stages)')
+    parser.add_argument('--stage', type=str, default='analysis',
+                       choices=['analysis', 'train', 'evaluate', 'all'],
+                       help='Pipeline stage to run')
     parser.add_argument('--top-k', type=int, default=None,
                        help='Number of top outliers to identify per class (overrides config, default: 3)')
     parser.add_argument('--log-level', type=str, default=None,
@@ -237,35 +436,48 @@ def main():
     logger = setup_logging(args.log_level)
     
     logger.info("=" * 60)
-    logger.info("BDD100K Object Detection Analysis")
+    logger.info("BDD100K Object Detection Pipeline")
     logger.info("=" * 60)
     logger.info(f"Data Root: {args.data_root}")
     logger.info(f"Output Dir: {args.output_dir}")
-    logger.info(f"Split: {args.split}")
-    logger.info(f"Stages: {', '.join(args.stages)}")
+    logger.info(f"Stage: {args.stage}")
+    if args.stage in ['analysis', 'preprocessing']:
+        logger.info(f"Split: {args.split}")
     
     # Run stages
-    stages = args.stages
-    if 'all' in stages:
-        stages = ['analysis', 'preprocessing', 'model_test']
-    
     success = True
     
-    if 'analysis' in stages:
-        success = run_analysis(args, logger) and success
+    if args.stage == 'all':
+        # Run complete pipeline
+        if success:
+            logger.info("\n>>> Running Analysis Stage (train split)")
+            args.split = 'train'  # Analysis on train data
+            success = run_analysis(args, logger) and success
+        
+        if success:
+            logger.info("\n>>> Running Training Stage")
+            success = run_training(args, logger, config) and success
+        
+        if success:
+            logger.info("\n>>> Running Evaluation Stage (val split)")
+            args.split = 'val'  # Evaluate on validation data
+            success = run_evaluation(args, logger, config) and success
     
-    if 'preprocessing' in stages and success:
-        success = run_preprocessing(args, logger) and success
+    elif args.stage == 'analysis':
+        success = run_analysis(args, logger)
     
-    if 'model_test' in stages and success:
-        success = run_model_test(args, logger) and success
+    elif args.stage == 'train':
+        success = run_training(args, logger, config)
+    
+    elif args.stage == 'evaluate':
+        success = run_evaluation(args, logger, config)
     
     # Summary
     logger.info("\n" + "=" * 60)
     if success:
-        logger.info("✓ Pipeline completed successfully!")
+        logger.info("✓ Pipeline stage completed successfully!")
     else:
-        logger.error("✗ Pipeline failed. Check logs above.")
+        logger.error("✗ Pipeline stage failed. Check logs above.")
     logger.info("=" * 60)
     
     return 0 if success else 1

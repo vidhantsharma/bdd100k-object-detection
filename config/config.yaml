@@ -11,7 +11,8 @@ global:
 
 # Data Paths
 data:
-  root: "data/raw"
+  root: "data/subset"  # Use subset for faster training (1000 train, 200 val)
+  # root: "data/raw"   # Uncomment to use full dataset (69k train, 10k val)
   splits:
     train: "bdd100k_labels_images_train.json"
     val: "bdd100k_labels_images_val.json"
@@ -76,27 +77,57 @@ insights:
 # FUTURE EXTENSIONS (not yet implemented)
 # ============================================================================
 
-# Model Configuration (for future use)
+# Model Configuration
 model:
   architecture: "faster_rcnn_resnet50_fpn"
-  pretrained: true
+  pretrained: true  # Set to false to train from scratch, true to fine-tune
   num_classes: 10
   backbone:
     freeze_layers: 0
+    trainable_layers: 3  # Number of trainable resnet layers (0-5)
+  min_size: 800
+  max_size: 1333
 
-# Training Configuration (for future use)
+# Training Configuration
 training:
-  batch_size: 4
-  num_epochs: 50
-  learning_rate: 0.001
-  optimizer: "adam"
+  batch_size: 2  # Reduced from 4 due to GPU memory (3.68 GB)
+  num_epochs: 10
+  learning_rate: 0.005
+  optimizer: "sgd"
+  momentum: 0.9
+  weight_decay: 0.0005
+  gradient_accumulation_steps: 2  # Effective batch size = 2 * 2 = 4
+  
+  # Class imbalance handling
+  use_class_weights: true  # Compute class weights from data analysis
+  use_weighted_sampling: true  # Oversample images with rare classes
+  loss_type: "weighted"    # Options: "weighted", "focal", "standard"
+  
+  # Scheduler
   scheduler:
-    type: "step"
-    step_size: 10
+    type: "step"  # Options: "step", "multistep", "cosine", "none"
+    step_size: 3
     gamma: 0.1
+  
+  # Early stopping
   early_stopping:
     patience: 5
     min_delta: 0.001
+  
+  # Data loading
+  num_workers: 4
+  min_bbox_area: 16
+  
+  # Logging
+  log_interval: 10
+  save_interval: 1  # Save checkpoint every N epochs
+  
+# Evaluation Configuration
+evaluation:
+  batch_size: 4
+  num_workers: 4
+  iou_threshold: 0.5
+  confidence_threshold: 0.5
 
 # Evaluation Configuration (for future use)
 evaluation:

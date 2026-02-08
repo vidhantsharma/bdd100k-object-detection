@@ -16,8 +16,8 @@ class BDDDataset(Dataset):
     Args:
         root_dir: Root directory containing images and labels
         split: Dataset split ('train', 'val', or 'test')
-        transform: Optional transform to be applied on image
-        target_transform: Optional transform to be applied on target
+        transform: Optional transform to be applied on both image and target (bboxes)
+        min_bbox_area: Minimum bounding box area to include (filters noise)
     """
     
     # BDD100K has 10 classes for object detection
@@ -31,13 +31,11 @@ class BDDDataset(Dataset):
         root_dir: str,
         split: str = 'train',
         transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None,
         min_bbox_area: int = 16
     ):
         self.root_dir = root_dir
         self.split = split
         self.transform = transform
-        self.target_transform = target_transform
         self.min_bbox_area = min_bbox_area
         
         # Paths
@@ -45,10 +43,10 @@ class BDDDataset(Dataset):
         self.labels_file = os.path.join(root_dir, 'labels', f'bdd100k_labels_images_{split}.json')
         
         # Load annotations
-        self.annotations = self._load_annotations()
+        self.images_with_annotations = self._load_images_with_annotations()
         self.class_to_idx = {cls: idx for idx, cls in enumerate(self.CLASSES)}
         
-    def _load_annotations(self) -> List[Dict]:
+    def _load_images_with_annotations(self) -> List[Dict]:
         """Load BDD100K JSON annotations."""
         if not os.path.exists(self.labels_file):
             raise FileNotFoundError(f"Labels file not found: {self.labels_file}")
@@ -68,7 +66,7 @@ class BDDDataset(Dataset):
         return valid_annos
     
     def __len__(self) -> int:
-        return len(self.annotations)
+        return len(self.images_with_annotations)
     
     def __getitem__(self, idx: int) -> Tuple[Any, Dict[str, Any]]:
         """
@@ -78,17 +76,17 @@ class BDDDataset(Dataset):
             image: PIL Image or tensor (if transform applied)
             target: Dict containing 'boxes', 'labels', 'image_id', etc.
         """
-        anno = self.annotations[idx]
+        image_with_annotations = self.images_with_annotations[idx]
         
         # Load image
-        image_path = os.path.join(self.images_dir, anno['name'])
+        image_path = os.path.join(self.images_dir, image_with_annotations['name'])
         image = Image.open(image_path).convert('RGB')
         
         # Parse annotations
         boxes = []
         labels = []
         
-        for label in anno.get('labels', []):
+        for label in image_with_annotations.get('labels', []):
             if 'box2d' not in label:
                 continue
             
@@ -128,18 +126,6 @@ class BDDDataset(Dataset):
         
         # Apply transforms
         if self.transform is not None:
-            image = self.transform(image)
-        
-        if self.target_transform is not None:
-            target = self.target_transform(target)
+            image, target = self.transform(image, target)
         
         return image, target
-    
-    def get_image_info(self, idx: int) -> Dict[str, Any]:
-        """Get image metadata."""
-        anno = self.annotations[idx]
-        return {
-            'name': anno['name'],
-            'num_objects': len([l for l in anno.get('labels', []) if 'box2d' in l]),
-            'attributes': anno.get('attributes', {})
-        }

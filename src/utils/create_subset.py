@@ -148,6 +148,12 @@ def create_balanced_subset(
     output_images_path = Path(output_images_dir)
     
     output_json_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Clean output images directory if it exists (remove old subset)
+    if output_images_path.exists():
+        print(f"\nCleaning existing output directory: {output_images_path}")
+        shutil.rmtree(output_images_path)
+    
     output_images_path.mkdir(parents=True, exist_ok=True)
     
     # Save subset JSON

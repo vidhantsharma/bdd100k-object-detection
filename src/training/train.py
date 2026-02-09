@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from src.models.detector import BDDDetector, create_model
 from src.training.optimizer import create_optimizer
-from src.evaluation.metrics import evaluate_model
+from src.evaluation.evaluate import evaluate_model
 
 
 class Trainer:

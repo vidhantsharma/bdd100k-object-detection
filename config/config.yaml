@@ -127,7 +127,7 @@ evaluation:
   batch_size: 4
   num_workers: 4
   iou_threshold: 0.5
-  confidence_threshold: 0.5
+  confidence_threshold: 0.05
 
 # Evaluation Configuration (for future use)
 evaluation:

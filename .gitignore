@@ -13,7 +13,7 @@ data/subset/labels/*.json
 # Generated analysis outputs
 data/analysis/*.json
 data/analysis/*.html
-data/analysis/visualizations/*.png
+data/analysis/visualizations/**/*.png
 
 # Model checkpoints (if any)
 data/training/*.pth
@@ -42,6 +42,13 @@ ENV/
 # OS files
 .DS_Store
 Thumbs.db
+
+# ============================================================================
+# EVALUATION OUTPUTS
+# ============================================================================
+data/evaluation/*.json
+data/evaluation/*.html
+data/evaluation/visualizations/**/*.png
 
 # ============================================================================
 # PROJECT SPECIFIC

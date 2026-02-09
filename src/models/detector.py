@@ -26,6 +26,7 @@ class BDDDetector(nn.Module):
         trainable_backbone_layers: int = 3,
         min_size: int = 800,
         max_size: int = 1333,
+        keep_coco_head: bool = False,
         **kwargs
     ):
         """
@@ -40,11 +41,14 @@ class BDDDetector(nn.Module):
                                       When pretrained=False: 5 recommended (train all layers)
             min_size: Minimum size for image resizing
             max_size: Maximum size for image resizing
+            keep_coco_head: If True, keeps COCO 91-class head for evaluation (no training)
+                          If False, replaces head with BDD classes for training
         """
         super().__init__()
         
         self.num_classes = num_classes
         self.class_names = self.CLASS_NAMES[:num_classes]
+        self.keep_coco_head = keep_coco_head
         
         if not pretrained and trainable_backbone_layers < 5:
             print(f"Warning: Training from scratch with only {trainable_backbone_layers} trainable backbone layers.")
@@ -65,15 +69,18 @@ class BDDDetector(nn.Module):
         )
         
         # Replace the classifier head for BDD100K classes
-        # Get number of input features for the classifier
-        in_features = self.model.roi_heads.box_predictor.cls_score.in_features
-        
-        # Replace the pre-trained head with a new one
-        # +1 for background class
-        self.model.roi_heads.box_predictor = FastRCNNPredictor(
-            in_features, 
-            num_classes + 1  # +1 for background
-        )
+        if not keep_coco_head:
+            # Get number of input features for the classifier
+            in_features = self.model.roi_heads.box_predictor.cls_score.in_features
+            
+            # Replace the pre-trained head with a new one
+            # +1 for background class
+            self.model.roi_heads.box_predictor = FastRCNNPredictor(
+                in_features, 
+                num_classes + 1  # +1 for background
+            )
+        else:
+            print("Keeping COCO 91-class head for pretrained model evaluation")
         
     def forward(self, images, targets=None):
         """
@@ -139,6 +146,7 @@ def create_model(
     pretrained: bool = True,
     trainable_backbone_layers: int = 3,
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
+    keep_coco_head: bool = False,
     **kwargs
 ) -> BDDDetector:
     """
@@ -149,6 +157,7 @@ def create_model(
         pretrained: Use pretrained weights
         trainable_backbone_layers: Number of trainable backbone layers (0-5)
         device: Device to load model on
+        keep_coco_head: If True, keeps COCO 91-class head (for evaluation only)
         **kwargs: Additional arguments for BDDDetector
         
     Returns:
@@ -158,6 +167,7 @@ def create_model(
         num_classes=num_classes,
         pretrained=pretrained,
         trainable_backbone_layers=trainable_backbone_layers,
+        keep_coco_head=keep_coco_head,
         **kwargs
     )
     model = model.to(device)

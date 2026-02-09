@@ -326,36 +326,50 @@ def run_evaluation(args, logger, config):
     import torch
     from src.models.detector import create_model
     from src.dataloaders.bdd_dataloader import make_dataloader
-    from src.evaluation.metrics import evaluate_model
+    from src.datasets.bdd_dataset import BDDDataset
+    from src.evaluation.evaluate import evaluate_model, save_results, print_results
+    from src.evaluation.visualize import visualize_batch
+    from src.utils.constants import COCO_TO_BDD_MAPPING
     
     # Device setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Device: {device}")
     
-    # Find best model
+    # Setup output directory
+    eval_output_dir = Path(args.output_dir) / 'evaluation'
+    vis_dir = eval_output_dir / 'visualizations'
+    vis_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Check if evaluating pretrained or trained model
     training_output_dir = Path(args.output_dir) / 'training'
     model_path = training_output_dir / 'best_model.pth'
     
-    if not model_path.exists():
-        logger.error(f"Model not found: {model_path}")
-        logger.info("Please run training stage first")
-        return False
+    if model_path.exists():
+        # Evaluate trained model
+        logger.info(f"Loading trained model from: {model_path}")
+        model = create_model(
+            num_classes=len(BDDDataset.CLASSES),
+            pretrained=False,
+            device=device
+        )
+        checkpoint = torch.load(model_path, map_location=device)
+        model.model.load_state_dict(checkpoint['model_state_dict'])
+        use_coco_mapping = False
+        logger.info("Loaded trained model")
+    else:
+        # Evaluate pretrained COCO model
+        logger.warning(f"Trained model not found at {model_path}")
+        logger.info("Using pretrained COCO model with class mapping")
+        model = create_model(
+            num_classes=len(BDDDataset.CLASSES),
+            pretrained=True,
+            keep_coco_head=True,
+            device=device
+        )
+        use_coco_mapping = True
+        logger.info("Loaded pretrained COCO model")
     
-    logger.info(f"Loading model from: {model_path}")
-    
-    # Create model
-    model_config = config.get('model', {})
-    model = create_model(
-        num_classes=model_config.get('num_classes', 10),
-        pretrained=False,
-        device=device
-    )
-    
-    # Load checkpoint
-    checkpoint = torch.load(model_path, map_location=device)
-    model.model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
-    logger.info("Model loaded successfully")
     
     # Create validation dataloader
     eval_config = config.get('evaluation', {})
@@ -370,29 +384,103 @@ def run_evaluation(args, logger, config):
     logger.info(f"Validation dataset: {len(val_loader.dataset)} images")
     
     # Run evaluation
-    logger.info("\nEvaluating model...")
-    metrics = evaluate_model(
-        model,
-        val_loader,
-        device=str(device),
+    logger.info("\nRunning evaluation...")
+    results = evaluate_model(
+        model=model,
+        dataloader=val_loader,
+        class_names=BDDDataset.CLASSES,
+        device=device,
         iou_threshold=eval_config.get('iou_threshold', 0.5),
-        confidence_threshold=eval_config.get('confidence_threshold', 0.5)
+        confidence_threshold=0.0,  # AP sweeps all thresholds, don't filter
+        use_coco_mapping=use_coco_mapping
     )
     
-    logger.info("\n" + "=" * 60)
-    logger.info("Evaluation Results:")
-    logger.info("=" * 60)
-    logger.info(f"mAP @ IoU={eval_config.get('iou_threshold', 0.5)}: {metrics['mAP']:.4f}")
-    logger.info(f"Number of images: {metrics['num_images']}")
+    # Print results
+    print_results(results)
     
     # Save results
-    eval_output_dir = Path(args.output_dir) / 'evaluation'
-    eval_output_dir.mkdir(parents=True, exist_ok=True)
+    save_results(results, eval_output_dir / 'results.json')
+    logger.info(f"Results saved to: {eval_output_dir / 'results.json'}")
     
-    results_path = eval_output_dir / 'evaluation_results.json'
-    with open(results_path, 'w') as f:
-        json.dump(metrics, f, indent=2)
-    logger.info(f"\nResults saved to: {results_path}")
+    # Generate visualizations
+    logger.info("\nGenerating visualizations...")
+    
+    # Strategy: Collect more images for per-class visualization diversity
+    # Collect images from multiple batches
+    all_images = []
+    all_targets = []
+    all_predictions = []
+    
+    # Collect many images (50+) for better per-class random sampling
+    num_images_to_collect = 50
+    for batch_images, batch_targets in val_loader:
+        batch_images_gpu = [img.to(device) for img in batch_images]
+        
+        with torch.no_grad():
+            batch_predictions = model(batch_images_gpu)
+        
+        # Apply COCO→BDD mapping if needed
+        if use_coco_mapping:
+            mapped_preds = []
+            for pred in batch_predictions:
+                valid_mask = torch.tensor([
+                    label.item() in COCO_TO_BDD_MAPPING 
+                    for label in pred['labels']
+                ], dtype=torch.bool)
+                
+                if valid_mask.any():
+                    bdd_labels = torch.tensor([
+                        COCO_TO_BDD_MAPPING[label.item()]
+                        for label in pred['labels'][valid_mask]
+                    ], dtype=torch.int64, device=pred['labels'].device)
+                    
+                    mapped_preds.append({
+                        'boxes': pred['boxes'][valid_mask],
+                        'labels': bdd_labels,
+                        'scores': pred['scores'][valid_mask]
+                    })
+                else:
+                    mapped_preds.append({
+                        'boxes': torch.empty((0, 4), device=device),
+                        'labels': torch.empty(0, dtype=torch.int64, device=device),
+                        'scores': torch.empty(0, device=device)
+                    })
+            batch_predictions = mapped_preds
+        
+        all_images.extend(batch_images)
+        all_targets.extend(batch_targets)
+        all_predictions.extend(batch_predictions)
+        
+        if len(all_images) >= num_images_to_collect:
+            break
+    
+    # Visualize first 6 images for main batch visualization
+    visualize_batch(
+        images=all_images[:6],
+        predictions=all_predictions[:6],
+        targets=all_targets[:6],
+        class_names=BDDDataset.CLASSES,
+        save_path=vis_dir / 'sample_predictions.png',
+        max_images=6,
+        confidence_threshold=eval_config.get('confidence_threshold', 0.3)
+    )
+    
+    # Generate per-class visualizations using ALL collected images
+    logger.info("\nGenerating per-class visualizations...")
+    from src.evaluation.visualize import visualize_per_class
+    
+    visualize_per_class(
+        images=all_images,  # Use all collected images for better diversity
+        predictions=all_predictions,
+        targets=all_targets,
+        class_names=BDDDataset.CLASSES,
+        save_dir=vis_dir / 'per_class',
+        max_per_class=3,
+        confidence_threshold=eval_config.get('confidence_threshold', 0.3)
+    )
+    
+    logger.info(f"Visualizations saved to: {vis_dir}/")
+    logger.info("\n✓ Evaluation complete!")
     
     return True
 

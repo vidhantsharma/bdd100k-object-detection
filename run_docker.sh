@@ -147,9 +147,9 @@ if [ $# -eq 0 ]; then
     echo "  # Evaluate model"
     echo "  python3 main.py --stage evaluate"
     echo ""
-    $COMPOSE_CMD run --rm bdd100k
+    $COMPOSE_CMD run --rm --service-ports bdd100k
 else
     # Run provided command
     echo "Running command: $@"
-    $COMPOSE_CMD run --rm bdd100k "$@"
+    $COMPOSE_CMD run --rm --service-ports bdd100k "$@"
 fi

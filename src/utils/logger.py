@@ -1,4 +1,4 @@
-"""Simple logger wrapper placeholder."""
+"""logger wrapper"""
 import logging
 
 

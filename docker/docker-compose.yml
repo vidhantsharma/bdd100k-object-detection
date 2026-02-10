@@ -29,7 +29,7 @@ services:
       # These folders will be created automatically when outputs are generated
       - ../data:/workspace/data
       
-      # Source code (for development)
+      # Source code
       - ../src:/workspace/src
       - ../config:/workspace/config
       - ../main.py:/workspace/main.py

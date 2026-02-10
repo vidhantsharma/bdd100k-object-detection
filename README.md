@@ -104,6 +104,26 @@ xdg-open data/analysis/train_dashboard.html
 
 **Outputs**: `data/analysis/` - Statistics, dashboards, visualizations
 
+### View TensorBoard Training Logs
+
+TensorBoard logs are automatically generated during training. To view them:
+
+```bash
+# Option 1: From host machine (outside Docker) - RECOMMENDED
+tensorboard --logdir=<project_root>/data/training/logs --port=6006
+
+# Option 2: From inside Docker container
+tensorboard --logdir=/workspace/data/training/logs --host=0.0.0.0 --port=6006
+
+# Then open in browser: http://localhost:6006
+```
+
+**TensorBoard shows:**
+- Training & validation loss curves
+- Learning rate schedule
+- Loss components (classification, box regression, RPN losses)
+- Real-time training progress
+
 ---
 
 ## 🎓 Model: Faster R-CNN + ResNet50-FPN

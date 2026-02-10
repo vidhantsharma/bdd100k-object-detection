@@ -92,7 +92,11 @@ def get_dataloaders(
     train_sampler = None
     if use_weighted_sampling:
         if class_weights is None:
-            raise ValueError("class_weights must be provided when use_weighted_sampling=True")
+            raise ValueError(
+                "class_weights must be provided when use_weighted_sampling=True.\n"
+                "Please run the analysis stage first to compute class weights:\n"
+                "  python3 main.py --stage analysis --split train"
+            )
         
         # Create temporary dataset to build sampler
         temp_train_dataset = BDDDataset(

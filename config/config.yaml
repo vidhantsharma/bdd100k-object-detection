@@ -1,118 +1,48 @@
 # ============================================================================
-# BDD100K Object Detection Analysis - Configuration
+# BDD100K Object Detection - Configuration
 # ============================================================================
 
 # Global Settings
 global:
-  seed: 42
   logging:
     level: INFO
-    save_dir: "./logs"
 
 # Data Paths
 data:
-  root: "data/subset"  # Use subset for faster training (1000 train, 200 val)
-  # root: "data/raw"   # Uncomment to use full dataset (69k train, 10k val)
-  splits:
-    train: "bdd100k_labels_images_train.json"
-    val: "bdd100k_labels_images_val.json"
-    test: "bdd100k_labels_images_test.json"
+  root: "data/subset"  # Use subset (1000 train, 200 val) or "data/raw" for full dataset
   output_dir: "data"
 
 # Analysis Configuration
 analysis:
-  # Statistics computation
-  compute_class_distribution: true
-  compute_bbox_stats: true
-  compute_attribute_stats: true
-  
-  # Anomaly detection thresholds
-  anomaly_detection:
-    rare_class_threshold: 0.01  # Classes with < 1% of total objects
-    high_variation_cv_threshold: 100  # Coefficient of variation threshold
-    tiny_box_threshold: 10  # Area in px²
-    large_box_threshold: 500000  # Area in px²
-    unusual_aspect_ratio_min: 0.1  # Width/height ratio
-    unusual_aspect_ratio_max: 10.0
-  
-  # Outlier detection
   outlier_detection:
-    top_k: 3  # Number of outliers per class
-    scoring:
-      size_deviation_weight: 15  # Points per std deviation
-      occlusion_weight: 20  # Points for occlusion anomaly
-      truncation_weight: 15  # Points for truncation anomaly
-  
-  # Visualization settings
-  visualization:
-    grid_cols: 4
-    image_size: [1280, 720]
-    dpi: 150
-    show_bbox: true
-    show_labels: true
-
-# Dashboard Configuration
-dashboard:
-  title: "BDD100K Dataset Analysis Dashboard"
-  theme: "plotly_white"
-  show_interactive: true
-  charts:
-    - class_distribution
-    - object_count_distribution
-    - bbox_size_by_class
-    - occlusion_truncation_rates
-    - weather_distribution
-    - time_distribution
-
-# Training Insights Configuration
-insights:
-  sections:
-    - class_imbalance
-    - size_anomalies
-    - occlusion_patterns
-    - quality_issues
-  recommendations: true
-
-# ============================================================================
-# FUTURE EXTENSIONS (not yet implemented)
-# ============================================================================
+    top_k: 3  # Number of outliers per class for visualization
 
 # Model Configuration
 model:
-  architecture: "faster_rcnn_resnet50_fpn"
-  pretrained: true  # Set to false to train from scratch, true to fine-tune
+  pretrained: true  # true = fine-tune from COCO, false = train from scratch
   num_classes: 10
   backbone:
-    freeze_layers: 0
-    trainable_layers: 3  # Number of trainable resnet layers (0-5)
-  min_size: 800
-  max_size: 1333
+    trainable_layers: 3  # Number of trainable ResNet layers (0-5)
 
 # Training Configuration
 training:
-  batch_size: 2  # Reduced from 4 due to GPU memory (3.68 GB)
+  batch_size: 2
   num_epochs: 10
   learning_rate: 0.005
-  optimizer: "sgd"
+  optimizer: "sgd"  # Options: "sgd", "adam", "adamw"
   momentum: 0.9
   weight_decay: 0.0005
-  gradient_accumulation_steps: 2  # Effective batch size = 2 * 2 = 4
+  gradient_accumulation_steps: 2
   
   # Class imbalance handling
-  use_class_weights: true  # Compute class weights from data analysis
-  use_weighted_sampling: true  # Oversample images with rare classes
-  loss_type: "weighted"    # Options: "weighted", "focal", "standard"
+  use_class_weights: true
+  use_weighted_sampling: true
   
-  # Scheduler
+  # Learning rate scheduler
   scheduler:
-    type: "step"  # Options: "step", "multistep", "cosine", "none"
+    type: "step"  # Options: "step", "multistep", "cosine", "plateau", "none"
     step_size: 3
     gamma: 0.1
-  
-  # Early stopping
-  early_stopping:
-    patience: 5
-    min_delta: 0.001
   
   # Data loading
   num_workers: 4
@@ -120,21 +50,11 @@ training:
   
   # Logging
   log_interval: 10
-  save_interval: 1  # Save checkpoint every N epochs
-  
+  save_interval: 1
+
 # Evaluation Configuration
 evaluation:
   batch_size: 4
   num_workers: 4
-  iou_threshold: 0.5
-  confidence_threshold: 0.05
-
-# Evaluation Configuration (for future use)
-evaluation:
-  metrics:
-    - mAP
-    - AP50
-    - AP75
-    - per_class_AP
-  iou_thresholds: [0.5, 0.75]
-  confidence_threshold: 0.5
+  iou_threshold: 0.5          # IoU threshold for matching predictions to ground truth (0.5 = mAP@0.5)
+  confidence_threshold: 0.05  # Min confidence score to keep predictions (lower = more detections, higher recall)

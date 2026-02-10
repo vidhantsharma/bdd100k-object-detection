@@ -344,16 +344,24 @@ def run_evaluation(args, logger, config):
     training_output_dir = Path(args.output_dir) / 'training'
     model_path = training_output_dir / 'best_model.pth'
     
-    if model_path.exists():
+    if model_path.exists() and not args.zero_shot:
         # Evaluate trained model
         logger.info(f"Loading trained model from: {model_path}")
         model = create_model(
             num_classes=len(BDDDataset.CLASSES),
             pretrained=False,
+            trainable_backbone_layers=5,
             device=device
         )
         checkpoint = torch.load(model_path, map_location=device)
-        model.model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Handle state dict with 'model.' prefix (saved from Detector wrapper)
+        state_dict = checkpoint['model_state_dict']
+        if any(k.startswith('model.') for k in state_dict.keys()):
+            # Strip 'model.' prefix from all keys
+            state_dict = {k.replace('model.', '', 1): v for k, v in state_dict.items()}
+        
+        model.model.load_state_dict(state_dict)
         use_coco_mapping = False
         logger.info("Loaded trained model")
     else:
@@ -499,6 +507,8 @@ def main():
     parser.add_argument('--stage', type=str, default='analysis',
                        choices=['analysis', 'train', 'evaluate', 'all'],
                        help='Pipeline stage to run')
+    parser.add_argument('--zero-shot', action='store_true',
+                       help='Use pretrained COCO model for evaluation (no fine-tuning)')
     parser.add_argument('--top-k', type=int, default=None,
                        help='Number of top outliers to identify per class (overrides config, default: 3)')
     parser.add_argument('--log-level', type=str, default=None,

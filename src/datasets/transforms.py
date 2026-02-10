@@ -115,7 +115,7 @@ class RandomResize:
 class ColorJitter:
     """Apply color jittering (brightness, contrast, saturation, hue)."""
     
-    def __init__(self, brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1):
+    def __init__(self, brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05):
         self.transform = T.ColorJitter(
             brightness=brightness,
             contrast=contrast,
@@ -135,7 +135,7 @@ class ColorJitter:
 def get_train_transform():
     """Get training transforms with augmentation."""
     return Compose([
-        ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
         RandomResize(min_size=600, max_size=1000),
         RandomHorizontalFlip(p=0.5),
         ToTensor(),

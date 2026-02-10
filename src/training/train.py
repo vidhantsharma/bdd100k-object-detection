@@ -253,9 +253,13 @@ class Trainer:
             print(f"  Learning Rate: {current_lr:.6f}")
             print(f"  Time: {epoch_time:.2f}s")
             
-            # Save checkpoint
+            # Save latest checkpoint (overwrites previous)
             if epoch % self.save_interval == 0:
-                self.save_checkpoint(f'checkpoint_epoch_{epoch}.pth')
+                # Remove old latest checkpoint if exists
+                latest_path = self.output_dir / 'latest_checkpoint.pth'
+                if latest_path.exists():
+                    latest_path.unlink()
+                self.save_checkpoint('latest_checkpoint.pth')
             
             # Save best model
             if val_metrics['val_loss'] < self.best_val_loss:

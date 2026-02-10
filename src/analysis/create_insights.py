@@ -273,8 +273,3 @@ def generate_quality_issues_section(data: Dict[str, Any]) -> str:
             {recommendations_html}
         </div>
     """
-
-
-if __name__ == "__main__":
-    print("This module provides insights generation functionality.")
-    print("Use it via the main analysis pipeline.")
